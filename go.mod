@@ -145,4 +145,4 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-replace sigs.k8s.io/gateway-api-inference-extension => github.com/ophirazulai/gateway-api-inference-extension v1.4.1-0.20260331134033-17201664c06e
+replace sigs.k8s.io/gateway-api-inference-extension => github.com/ophirazulai/gateway-api-inference-extension v0.0.0-20260406173401-3ef605478ebf

@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/common/observability/logging"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/plugin"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/scheduling"
 )
@@ -28,6 +27,9 @@ const (
 
 	// NoMetricsFallbackScore is the score assigned when metrics are unavailable.
 	NoMetricsFallbackScore = 0.5
+
+	// logVerbosityDefault is the default log verbosity level.
+	logVerbosityDefault = 2
 )
 
 // HealthScorerParameters holds the configurable parameters for the health scorer.
@@ -69,14 +71,14 @@ func NewHealthScorer(ctx context.Context, params *HealthScorerParameters) *Healt
 
 	if p.KVCacheThreshold <= 0 || p.KVCacheThreshold > 1.0 {
 		p.KVCacheThreshold = KVCacheThresholdDefault
-		log.FromContext(ctx).V(logutil.DEFAULT).Info(fmt.Sprintf("kvCacheThreshold must be in (0, 1], using default %f", KVCacheThresholdDefault))
+		log.FromContext(ctx).V(logVerbosityDefault).Info(fmt.Sprintf("kvCacheThreshold must be in (0, 1], using default %f", KVCacheThresholdDefault))
 	}
 	if p.KVWeight < 0 || p.KVWeight > 1.0 ||
 		p.PreemptionWeight < 0 || p.PreemptionWeight > 1.0 ||
 		p.KVWeight+p.PreemptionWeight <= 0 || p.KVWeight+p.PreemptionWeight > 1.0 {
 		p.KVWeight = KVWeightDefault
 		p.PreemptionWeight = PreemptionWeightDefault
-		log.FromContext(ctx).V(logutil.DEFAULT).Info("weights must be in [0,1], sum in (0,1]; using defaults")
+		log.FromContext(ctx).V(logVerbosityDefault).Info("weights must be in [0,1], sum in (0,1]; using defaults")
 	}
 
 	return &HealthScorer{
@@ -152,7 +154,7 @@ func (s *HealthScorer) Score(_ context.Context, _ *scheduling.CycleState, _ *sch
 			kvScore = 0.0
 		} else {
 			ratio := kv / s.kvCacheThreshold
-			kvScore = 1.0 - math.Pow(ratio, 3)
+			kvScore = 1.0 - ratio*ratio*ratio
 		}
 
 		// Preemption delta

@@ -22,7 +22,8 @@ func kvScore(kv, threshold float64) float64 {
 	if kv >= threshold {
 		return 0.0
 	}
-	return 1.0 - math.Pow(kv/threshold, 3)
+	r := kv / threshold
+	return 1.0 - r*r*r
 }
 
 func TestHealthScorer(t *testing.T) {
