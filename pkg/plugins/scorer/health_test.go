@@ -169,7 +169,7 @@ func TestHealthScorerPreemptionDelta(t *testing.T) {
 	}
 }
 
-func TestHealthScorerRetainsPreemptionHistoryAcrossEndpointAbsence(t *testing.T) {
+func TestHealthScorerPrunesAbsentEndpoints(t *testing.T) {
 	approxOpt := cmpopts.EquateApprox(0, 0.01)
 	kvW := scorer.KVWeightDefault
 	preW := scorer.PreemptionWeightDefault
@@ -192,17 +192,17 @@ func TestHealthScorerRetainsPreemptionHistoryAcrossEndpointAbsence(t *testing.T)
 	// Cycle 1: both endpoints present, seeds prevPreemption
 	s.Score(context.Background(), nil, nil, []scheduling.Endpoint{epA, epB})
 
-	// Cycle 2: only pod-b remains — pod-a is temporarily absent from this scorer run.
+	// Cycle 2: only pod-b remains — pod-a is pruned from history.
 	s.Score(context.Background(), nil, nil, []scheduling.Endpoint{epB})
 
-	// Cycle 3: pod-a returns with preemption increased to 6.
-	// Expected: baseline from cycle 1 is retained, so delta is detected and preemption is penalized.
+	// Cycle 3: pod-a returns with preemption=6.
+	// Since pod-a was pruned, it is treated as first-seen (preScore=1.0).
 	got := s.Score(context.Background(), nil, nil, []scheduling.Endpoint{epAWithIncreasedPreemptions, epB})
 
-	wantA := kvW*1.0 + preW*0.0 // delta=+1 should be penalized
+	wantA := kvW*1.0 + preW*1.0 // first-seen after pruning → healthy
 	wantB := kvW*1.0 + preW*1.0 // unchanged
 	if diff := cmp.Diff(map[scheduling.Endpoint]float64{epAWithIncreasedPreemptions: wantA, epB: wantB}, got, approxOpt); diff != "" {
-		t.Errorf("Endpoint absence should not reset preemption baseline (-want +got): %v", diff)
+		t.Errorf("Pruned endpoint should be treated as first-seen (-want +got): %v", diff)
 	}
 }
 
@@ -284,6 +284,38 @@ func TestHealthScorerInvalidWeightsFallbackToDefaults(t *testing.T) {
 	want := scorer.KVWeightDefault*wantKV + scorer.PreemptionWeightDefault*1.0
 	if diff := cmp.Diff(map[scheduling.Endpoint]float64{ep: want}, got, approxOpt); diff != "" {
 		t.Errorf("Invalid weights should fallback to defaults (-want +got): %v", diff)
+	}
+}
+
+func TestHealthScorerInvalidKVValuesAreSanitized(t *testing.T) {
+	approxOpt := cmpopts.EquateApprox(0, 0.01)
+	kvW := scorer.KVWeightDefault
+	preW := scorer.PreemptionWeightDefault
+
+	s := scorer.NewHealthScorer(utils.NewTestContext(t), &scorer.DefaultHealthScorerParameters)
+
+	epNegativeKV := scheduling.NewEndpoint(
+		&fwkdl.EndpointMetadata{NamespacedName: k8stypes.NamespacedName{Name: "negative-kv"}},
+		&fwkdl.Metrics{KVCacheUsagePercent: -0.2, PreemptionCount: 0}, nil,
+	)
+	epNaNKV := scheduling.NewEndpoint(
+		&fwkdl.EndpointMetadata{NamespacedName: k8stypes.NamespacedName{Name: "nan-kv"}},
+		&fwkdl.Metrics{KVCacheUsagePercent: math.NaN(), PreemptionCount: 0}, nil,
+	)
+	epInfKV := scheduling.NewEndpoint(
+		&fwkdl.EndpointMetadata{NamespacedName: k8stypes.NamespacedName{Name: "inf-kv"}},
+		&fwkdl.Metrics{KVCacheUsagePercent: math.Inf(1), PreemptionCount: 0}, nil,
+	)
+
+	got := s.Score(context.Background(), nil, nil, []scheduling.Endpoint{epNegativeKV, epNaNKV, epInfKV})
+	want := map[scheduling.Endpoint]float64{
+		epNegativeKV: kvW*1.0 + preW*1.0, // clamped to 0.0
+		epNaNKV:      kvW*1.0 + preW*1.0, // non-finite treated as 0.0
+		epInfKV:      kvW*0.0 + preW*1.0, // clamped to 1.0
+	}
+
+	if diff := cmp.Diff(want, got, approxOpt); diff != "" {
+		t.Errorf("Invalid KV values should be sanitized (-want +got): %v", diff)
 	}
 }
 

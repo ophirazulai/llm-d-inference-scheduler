@@ -132,8 +132,11 @@ func (s *HealthScorer) Score(_ context.Context, _ *scheduling.CycleState, _ *sch
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
+	seen := make(map[string]struct{}, len(endpoints))
+
 	for _, endpoint := range endpoints {
 		epName := endpoint.GetMetadata().NamespacedName.String()
+		seen[epName] = struct{}{}
 
 		metrics := endpoint.GetMetrics()
 		if metrics == nil {
@@ -141,8 +144,9 @@ func (s *HealthScorer) Score(_ context.Context, _ *scheduling.CycleState, _ *sch
 			continue
 		}
 
-		// KV cache cubic penalty
-		kv := metrics.KVCacheUsagePercent
+		// KV cache cubic penalty.
+		// Guard against invalid metric values so scorer output always remains in [0,1].
+		kv := sanitizeKVCacheUsage(metrics.KVCacheUsagePercent)
 		var kvScore float64
 		if kv >= s.kvCacheThreshold {
 			kvScore = 0.0
@@ -169,8 +173,40 @@ func (s *HealthScorer) Score(_ context.Context, _ *scheduling.CycleState, _ *sch
 			}
 		}
 
-		scoredEndpoints[endpoint] = s.kvWeight*kvScore + s.preemptionWeight*preScore
+		score := s.kvWeight*kvScore + s.preemptionWeight*preScore
+		scoredEndpoints[endpoint] = clamp01(score)
+	}
+
+	// Prune stale entries for endpoints no longer in the candidate set.
+	for epName := range s.prevPreemption {
+		if _, ok := seen[epName]; !ok {
+			delete(s.prevPreemption, epName)
+		}
 	}
 
 	return scoredEndpoints
+}
+
+// sanitizeKVCacheUsage clamps KV cache usage to [0,1] and handles non-finite values.
+func sanitizeKVCacheUsage(kv float64) float64 {
+	if math.IsNaN(kv) {
+		return 0
+	}
+	if math.IsInf(kv, 1) {
+		return 1
+	}
+	if math.IsInf(kv, -1) {
+		return 0
+	}
+	return clamp01(kv)
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
