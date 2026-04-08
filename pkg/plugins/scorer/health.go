@@ -126,7 +126,8 @@ func (s *HealthScorer) Category() scheduling.ScorerCategory {
 // Preemption signal: binary delta — 0.0 if preemptions increased since last cycle, 1.0 otherwise.
 //
 // Final score: kvWeight * kvScore + preemptionWeight * preScore
-func (s *HealthScorer) Score(_ context.Context, _ *scheduling.CycleState, _ *scheduling.LLMRequest, endpoints []scheduling.Endpoint) map[scheduling.Endpoint]float64 {
+func (s *HealthScorer) Score(ctx context.Context, _ *scheduling.CycleState, _ *scheduling.LLMRequest, endpoints []scheduling.Endpoint) map[scheduling.Endpoint]float64 {
+	logger := log.FromContext(ctx).WithName(s.typedName.String())
 	scoredEndpoints := make(map[scheduling.Endpoint]float64, len(endpoints))
 
 	s.mutex.Lock()
@@ -154,6 +155,9 @@ func (s *HealthScorer) Score(_ context.Context, _ *scheduling.CycleState, _ *sch
 			ratio := kv / s.kvCacheThreshold
 			kvScore = 1.0 - math.Pow(ratio, 3)
 		}
+		if kvScore < 0.25 {
+			logger.V(logutil.DEFAULT).Info("low KV cache score", "endpoint", epName, "kvScore", kvScore, "kvUsage", kv, "threshold", s.kvCacheThreshold)
+		}
 
 		// Preemption delta
 		currentPreemption := metrics.PreemptionCount
@@ -167,6 +171,7 @@ func (s *HealthScorer) Score(_ context.Context, _ *scheduling.CycleState, _ *sch
 		} else {
 			delta := currentPreemption - prevPreemption
 			if delta > 0 {
+				logger.V(logutil.DEFAULT).Info("preemption delta detected", "endpoint", epName, "delta", delta, "current", currentPreemption, "previous", prevPreemption)
 				preScore = 0.0
 			} else {
 				preScore = 1.0
