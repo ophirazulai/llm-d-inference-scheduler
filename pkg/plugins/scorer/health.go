@@ -156,7 +156,7 @@ func (s *HealthScorer) Score(ctx context.Context, _ *scheduling.CycleState, _ *s
 			kvScore = 1.0 - math.Pow(ratio, 3)
 		}
 		if kvScore < 0.25 {
-			logger.V(logutil.DEFAULT).Info("low KV cache score", "endpoint", epName, "kvScore", kvScore, "kvUsage", kv, "threshold", s.kvCacheThreshold)
+			logger.Error(nil, "low KV cache score", "endpoint", epName, "kvScore", kvScore, "kvUsage", kv, "threshold", s.kvCacheThreshold)
 		}
 
 		// Preemption delta
@@ -171,7 +171,7 @@ func (s *HealthScorer) Score(ctx context.Context, _ *scheduling.CycleState, _ *s
 		} else {
 			delta := currentPreemption - prevPreemption
 			if delta > 0 {
-				logger.V(logutil.DEFAULT).Info("preemption delta detected", "endpoint", epName, "delta", delta, "current", currentPreemption, "previous", prevPreemption)
+				logger.Error(nil, "preemption delta detected", "endpoint", epName, "delta", delta, "current", currentPreemption, "previous", prevPreemption)
 				preScore = 0.0
 			} else {
 				preScore = 1.0
