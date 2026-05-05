@@ -122,11 +122,10 @@ func NewActiveRequest(ctx context.Context, params *Parameters) *ActiveRequest {
 	// Set max busy score (default: 1.0)
 	maxBusyScore := 1.0
 	if params != nil && params.MaxBusyScore != nil {
-		v := *params.MaxBusyScore
-		if v >= 0 && v <= 1.0 {
-			maxBusyScore = v
+		if *params.MaxBusyScore >= 0 && *params.MaxBusyScore <= 1.0 {
+			maxBusyScore = *params.MaxBusyScore
 		} else {
-			logger.Info("Ignoring out-of-range maxBusyScore; using default 1.0", "provided", v)
+			logger.Info("Ignoring out-of-range maxBusyScore; using default 1.0", "provided", *params.MaxBusyScore)
 		}
 	}
 
