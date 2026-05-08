@@ -26,7 +26,7 @@ import (
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/plugin"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/requestcontrol"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/scheduling"
-	approxprefix "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/datalayer/attribute/prefix"
+	attrprefix "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/requestcontrol/dataproducer/tokenizer"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/telemetry"
 )
@@ -333,7 +333,7 @@ func (s *Scorer) Category() scheduling.ScorerCategory {
 // Produces declares the data keys this plugin writes to endpoints.
 func (s *Scorer) Produces() map[string]any {
 	return map[string]any{
-		approxprefix.PrefixCacheMatchInfoKey: approxprefix.PrefixCacheMatchInfo{},
+		attrprefix.PrefixCacheMatchInfoKey: attrprefix.PrefixCacheMatchInfo{},
 	}
 }
 
@@ -391,11 +391,11 @@ func (s *Scorer) PrepareRequestData(ctx context.Context,
 		}
 		addr := fmt.Sprintf("%s:%s", md.Address, md.Port)
 		matchLen := int(scores[addr])
-		ep.Put(approxprefix.PrefixCacheMatchInfoKey, approxprefix.NewPrefixCacheMatchInfo(matchLen, len(blockKeys), blockSize))
+		ep.Put(attrprefix.PrefixCacheMatchInfoKey, attrprefix.NewPrefixCacheMatchInfo(matchLen, len(blockKeys), blockSize))
 	}
 
 	// 6. Save to PluginState for Score() and PreRequest()
-	s.pluginState.Write(request.RequestId, stateKey, &precisePluginState{
+	s.pluginState.Write(request.RequestID, stateKey, &precisePluginState{
 		blockKeys: blockKeys,
 		scores:    scores,
 	})
@@ -449,14 +449,14 @@ func (s *Scorer) Score(ctx context.Context, cycleState *scheduling.CycleState, r
 	if request.TargetModel != "" {
 		span.SetAttributes(attribute.String("gen_ai.request.model", request.TargetModel))
 	}
-	if request.RequestId != "" {
-		span.SetAttributes(attribute.String("gen_ai.request.id", request.RequestId))
+	if request.RequestID != "" {
+		span.SetAttributes(attribute.String("gen_ai.request.id", request.RequestID))
 	}
 
 	// Try to reuse pre-computed scores from PrepareRequestData
 	var scores map[string]float64
 	if pluginStateData, err := plugin.ReadPluginStateKey[*precisePluginState](
-		s.pluginState, request.RequestId, stateKey); err == nil {
+		s.pluginState, request.RequestID, stateKey); err == nil {
 		scores = pluginStateData.scores
 		debugLogger.Info("Reusing pre-computed scores from PrepareRequestData")
 	} else {
@@ -495,7 +495,7 @@ func (s *Scorer) Score(ctx context.Context, cycleState *scheduling.CycleState, r
 				matchBlocks = 1
 			}
 		}
-		endpoint.Put(approxprefix.PrefixCacheMatchInfoKey, approxprefix.NewPrefixCacheMatchInfo(matchBlocks, 1, 1))
+		endpoint.Put(attrprefix.PrefixCacheMatchInfoKey, attrprefix.NewPrefixCacheMatchInfo(matchBlocks, 1, 1))
 	}
 
 	normalizedScores := indexedScoresToNormalizedScoredPods(endpoints, endpointToKey, scores)
@@ -540,13 +540,13 @@ func (s *Scorer) PreRequest(ctx context.Context,
 
 	// 1. Read block keys from PluginState
 	state, err := plugin.ReadPluginStateKey[*precisePluginState](
-		s.pluginState, request.RequestId, stateKey)
+		s.pluginState, request.RequestID, stateKey)
 	if err != nil {
 		logger.V(logging.TRACE).Info("No plugin state found for PreRequest, skipping speculative indexing",
-			"requestID", request.RequestId)
+			"requestID", request.RequestID)
 		return
 	}
-	s.pluginState.Delete(request.RequestId)
+	s.pluginState.Delete(request.RequestID)
 
 	if len(state.blockKeys) == 0 {
 		return
@@ -591,13 +591,13 @@ func (s *Scorer) PreRequest(ctx context.Context,
 	}
 
 	// 5. Register in TTL cache for automatic eviction
-	s.speculativeCache.Set(request.RequestId, &speculativeEntries{
+	s.speculativeCache.Set(request.RequestID, &speculativeEntries{
 		blockKeys:  state.blockKeys,
 		podEntries: allPodEntries,
 	}, s.speculativeTTL)
 
 	logger.V(logging.TRACE).Info("Added speculative entries",
-		"requestID", request.RequestId,
+		"requestID", request.RequestID,
 		"pod", speculativePod.PodIdentifier,
 		"blockKeys", len(state.blockKeys),
 		"ttl", s.speculativeTTL)
@@ -609,12 +609,6 @@ func (s *Scorer) PreRequest(ctx context.Context,
 // Required by the data layer's source/extractor type-compatibility check.
 func (s *Scorer) ExpectedInputType() reflect.Type {
 	return fwkdl.EndpointEventReflectType
-}
-
-// Extract is the base Extractor entrypoint and is unused for endpoint
-// extractors — the Runtime calls ExtractEndpoint instead.
-func (s *Scorer) Extract(_ context.Context, _ any, _ fwkdl.Endpoint) error {
-	return nil
 }
 
 // ExtractEndpoint reacts to endpoint lifecycle events from the data layer's
@@ -739,10 +733,11 @@ func (s *Scorer) getBlockSizeTokens() int {
 
 // getScores retrieves the endpoint scores from the KV-cache indexer
 // based on the provided LLM request.
-// If tokenized prompt data is found in CycleState (written by the tokenizer
-// scorer plugin), it calls ScoreTokens directly, bypassing prompt/chat tokenization.
-// Otherwise, chat completions and regular completions are tokenized internally.
-func (s *Scorer) getScores(ctx context.Context, cycleState *scheduling.CycleState, request *scheduling.InferenceRequest) (map[string]float64, error) {
+// If tokenized prompt data is found on the request (written by the tokenizer
+// DataProducer plugin), it calls ScoreTokens directly, bypassing
+// prompt/chat tokenization. Otherwise, chat completions and regular
+// completions are tokenized internally by the kvcache indexer.
+func (s *Scorer) getScores(ctx context.Context, _ *scheduling.CycleState, request *scheduling.InferenceRequest) (map[string]float64, error) {
 	logger := log.FromContext(ctx).WithName(s.typedName.String())
 	traceLogger := logger.V(logging.TRACE)
 
@@ -750,23 +745,24 @@ func (s *Scorer) getScores(ctx context.Context, cycleState *scheduling.CycleStat
 		"isChatCompletions", request.Body != nil && request.Body.ChatCompletions != nil,
 		"isCompletions", request.Body != nil && request.Body.Completions != nil)
 
-	// Read tokenized prompt from CycleState, written by the tokenizer scorer plugin.
-	if tp, err := scheduling.ReadCycleStateKey[*tokenizer.TokenizedPromptState](
-		cycleState, tokenizer.TokenizedPromptStateKey); err == nil && len(tp.TokenIDs) > 0 {
-		traceLogger.Info("tokens found in CycleState, skipping tokenization")
+	// Prefer pre-tokenized input from the tokenizer DataProducer plugin.
+	if request.Body != nil {
+		if tp := request.Body.TokenizedPrompt; tp != nil && len(tp.TokenIDs) > 0 {
+			traceLogger.Info("tokens found on request, skipping tokenization")
 
-		var extraFeatures []*kvblock.BlockExtraFeatures
-		if tp.MMFeatures != nil {
-			extraFeatures = kvblock.ComputeBlockExtraFeatures(
-				tp.MMFeatures.MMHashes, tp.MMFeatures.MMPlaceholders,
-				s.blockSizeTokens, len(tp.TokenIDs))
-		}
+			var extraFeatures []*kvblock.BlockExtraFeatures
+			if len(tp.MultiModalFeatures) > 0 {
+				mmHashes, mmPlaceholders := tokenizer.ConvertMMFeaturesFromUpstream(tp.MultiModalFeatures)
+				extraFeatures = kvblock.ComputeBlockExtraFeatures(
+					mmHashes, mmPlaceholders, s.blockSizeTokens, len(tp.TokenIDs))
+			}
 
-		scores, err := s.kvCacheIndexer.ScoreTokens(ctx, tp.TokenIDs, request.TargetModel, nil, extraFeatures)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get endpoint scores for tokens: %w", err)
+			scores, err := s.kvCacheIndexer.ScoreTokens(ctx, tp.TokenIDs, request.TargetModel, nil, extraFeatures)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get endpoint scores for tokens: %w", err)
+			}
+			return scores, nil
 		}
-		return scores, nil
 	}
 
 	// The upstream parser guarantees exactly one body is populated, but we defensively prioritize chat completions.

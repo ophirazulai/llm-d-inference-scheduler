@@ -79,7 +79,7 @@ import (
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/flowcontrol/fairness/globalstrict"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/flowcontrol/ordering/fcfs"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/flowcontrol/usagelimits"
-	testutils "github.com/llm-d/llm-d-inference-scheduler/test/utils/igw"
+	igwtestutils "github.com/llm-d/llm-d-inference-scheduler/test/utils/igw"
 )
 
 func init() {
@@ -192,8 +192,8 @@ func (r *benchRequest) ReceivedTimestamp() time.Time                   { return 
 
 // setupRegistry provisions the concrete FlowRegistry.
 func setupRegistry(
-	b *testing.B,
 	ctx context.Context,
+	b *testing.B,
 	handle plugin.Handle,
 	s shardCount,
 	p priorityLevels,
@@ -232,8 +232,8 @@ func setupRegistry(
 
 // setupBenchmarkHarness creates the standard SUT environment.
 func setupBenchmarkHarness(
-	b *testing.B,
 	ctx context.Context,
+	b *testing.B,
 	s shardCount,
 	p priorityLevels,
 	limit egressConcurrencyLimit,
@@ -241,7 +241,7 @@ func setupBenchmarkHarness(
 	customCfg *controller.Config,
 ) (*controller.FlowController, testDetector) {
 	b.Helper()
-	handle := testutils.NewTestHandle(ctx)
+	handle := igwtestutils.NewTestHandle(ctx)
 
 	fPolicy, err := globalstrict.GlobalStrictFairnessPolicyFactory(registry.DefaultFairnessPolicyRef, nil, handle)
 	if err != nil {
@@ -255,7 +255,7 @@ func setupBenchmarkHarness(
 	}
 	handle.AddPlugin(registry.DefaultOrderingPolicyRef, oPolicy)
 
-	reg := setupRegistry(b, ctx, handle, s, p)
+	reg := setupRegistry(ctx, b, handle, s, p)
 
 	detector := customDetector
 	if detector == nil {

@@ -43,7 +43,7 @@ import (
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/flowcontrol/types"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/datalayer"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/flowcontrol"
-	frameworkmocks "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/flowcontrol/mocks"
+	fwkfcmocks "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/flowcontrol/mocks"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/flowcontrol/usagelimits"
 )
 
@@ -86,8 +86,8 @@ func withHarnessClock(c clock.WithTicker) unitHarnessOption {
 // newUnitHarness creates a test environment with a mock processor factory, suitable for focused unit tests of the
 // controller's logic. It starts the controller's run loop using the provided context for lifecycle management.
 func newUnitHarness(
-	t *testing.T,
 	ctx context.Context,
+	t *testing.T,
 	cfg *Config,
 	registry *mockRegistryClient,
 	opts ...unitHarnessOption,
@@ -142,7 +142,7 @@ func newUnitHarness(
 
 // newIntegrationHarness creates a test environment that uses real `ShardProcessor`s, suitable for integration tests
 // validating the controller-processor interaction.
-func newIntegrationHarness(t *testing.T, ctx context.Context, cfg *Config, registry *mockRegistryClient) *testHarness {
+func newIntegrationHarness(ctx context.Context, t *testing.T, cfg *Config, registry *mockRegistryClient) *testHarness {
 	t.Helper()
 	mockDetector := &mockSaturationDetector{}
 	mockEndpointCandidates := &mocks.MockEndpointCandidates{}
@@ -295,7 +295,7 @@ type stubManagedQueue struct {
 func (s *stubManagedQueue) ByteSize() uint64 { return s.byteSizeV }
 
 func (s *stubManagedQueue) FlowQueueAccessor() flowcontrol.FlowQueueAccessor {
-	return &frameworkmocks.MockFlowQueueAccessor{ByteSizeV: s.byteSizeV}
+	return &fwkfcmocks.MockFlowQueueAccessor{ByteSizeV: s.byteSizeV}
 }
 
 // mockShardBuilder is a fixture to declaratively build mock `contracts.RegistryShard` for tests.
@@ -324,8 +324,8 @@ func (b *mockShardBuilder) build() contracts.RegistryShard {
 
 var defaultFlowKey = flowcontrol.FlowKey{ID: "test-flow", Priority: 100}
 
-func newTestRequest(key flowcontrol.FlowKey) *frameworkmocks.MockFlowControlRequest {
-	return &frameworkmocks.MockFlowControlRequest{
+func newTestRequest(key flowcontrol.FlowKey) *fwkfcmocks.MockFlowControlRequest {
+	return &fwkfcmocks.MockFlowControlRequest{
 		FlowKeyV:  key,
 		ByteSizeV: 100,
 		IDV:       "req-" + key.ID,
@@ -345,7 +345,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 		t.Run("OnReqCtxExpiredBeforeDistribution", func(t *testing.T) {
 			t.Parallel()
 			// Test that if the request context provided to EnqueueAndWait is already expired, it returns immediately.
-			h := newUnitHarness(t, t.Context(), &Config{DefaultRequestTTL: 1 * time.Minute}, nil)
+			h := newUnitHarness(t.Context(), t, &Config{DefaultRequestTTL: 1 * time.Minute}, nil)
 
 			// Configure registry to return a shard.
 			shardA := newMockShard("shard-A").build()
@@ -382,7 +382,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			t.Parallel()
 			// Create a context specifically for the controller's lifecycle.
 			ctx, cancel := context.WithCancel(t.Context())
-			h := newUnitHarness(t, ctx, &Config{}, nil)
+			h := newUnitHarness(ctx, t, &Config{}, nil)
 			cancel() // Immediately stop the controller.
 
 			// Wait for the controller's run loop and all workers (none in this case) to exit.
@@ -402,7 +402,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 		t.Run("OnNoShardsAvailable", func(t *testing.T) {
 			t.Parallel()
 			// The default mockRegistryClient returns an empty list of ActiveShards.
-			h := newUnitHarness(t, t.Context(), &Config{}, nil)
+			h := newUnitHarness(t.Context(), t, &Config{}, nil)
 
 			req := newTestRequest(defaultFlowKey)
 			outcome, err := h.fc.EnqueueAndWait(context.Background(), req)
@@ -415,7 +415,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 		t.Run("OnRegistryConnectionError", func(t *testing.T) {
 			t.Parallel()
 			mockRegistry := &mockRegistryClient{}
-			h := newUnitHarness(t, t.Context(), &Config{}, mockRegistry)
+			h := newUnitHarness(t.Context(), t, &Config{}, mockRegistry)
 
 			expectedErr := errors.New("simulated connection failure")
 			// Configure the registry to fail when attempting to retrieve ActiveFlowConnection.
@@ -438,7 +438,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 		t.Run("OnManagedQueueError", func(t *testing.T) {
 			t.Parallel()
 			mockRegistry := &mockRegistryClient{}
-			h := newUnitHarness(t, t.Context(), &Config{}, mockRegistry)
+			h := newUnitHarness(t.Context(), t, &Config{}, mockRegistry)
 
 			// Create a faulty shard that successfully leases the flow but fails to return the
 			// ManagedQueue. This shard should be considered as unavailable.
@@ -514,7 +514,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 					}
 					h.mockProcessorFactory.processors["shard-B"] = &mockShardProcessor{
 						SubmitFunc: func(item *internal.FlowItem) error {
-							item.SetHandle(&frameworkmocks.MockQueueItemHandle{})
+							item.SetHandle(&fwkfcmocks.MockQueueItemHandle{})
 							go item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil)
 							return nil
 						},
@@ -615,7 +615,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 				if tc.requestTTL > 0 {
 					harnessConfig.DefaultRequestTTL = tc.requestTTL
 				}
-				h := newUnitHarness(t, t.Context(), harnessConfig, mockRegistry)
+				h := newUnitHarness(t.Context(), t, harnessConfig, mockRegistry)
 
 				// Configure the registry to return the specified shards.
 				mockRegistry.WithConnectionFunc = func(
@@ -680,7 +680,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 				},
 			}
 			// Use a long TTL to ensure the failure is due to cancellation, not timeout.
-			h := newUnitHarness(t, t.Context(), &Config{DefaultRequestTTL: 10 * time.Second}, mockRegistry)
+			h := newUnitHarness(t.Context(), t, &Config{DefaultRequestTTL: 10 * time.Second}, mockRegistry)
 			h.mockProcessorFactory.processors["shard-A"] = &mockShardProcessor{
 				// Reject non-blocking attempt.
 				SubmitFunc: func(_ *internal.FlowItem) error { return internal.ErrProcessorBusy },
@@ -735,13 +735,13 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 				},
 			}
 			// Use a long TTL to ensure retries don't time out.
-			h := newUnitHarness(t, t.Context(), &Config{DefaultRequestTTL: 10 * time.Second}, mockRegistry)
+			h := newUnitHarness(t.Context(), t, &Config{DefaultRequestTTL: 10 * time.Second}, mockRegistry)
 
 			// Configure Shard A's processor to reject the request due to draining.
 			h.mockProcessorFactory.processors["shard-A"] = &mockShardProcessor{
 				SubmitFunc: func(item *internal.FlowItem) error {
 					// The processor accepts the item but then asynchronously finalizes it with ErrShardDraining.
-					item.SetHandle(&frameworkmocks.MockQueueItemHandle{})
+					item.SetHandle(&fwkfcmocks.MockQueueItemHandle{})
 					go item.FinalizeWithOutcome(types.QueueOutcomeRejectedOther, contracts.ErrShardDraining)
 					return nil
 				},
@@ -774,7 +774,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 		t.Run("OnReqCtxCancelledAfterDistribution", func(t *testing.T) {
 			t.Parallel()
 			// Use a long TTL to ensure the failure is due to cancellation.
-			h := newUnitHarness(t, t.Context(), &Config{DefaultRequestTTL: 10 * time.Second}, nil)
+			h := newUnitHarness(t.Context(), t, &Config{DefaultRequestTTL: 10 * time.Second}, nil)
 
 			shardA := newMockShard("shard-A").build()
 			h.mockRegistry.WithConnectionFunc = func(key flowcontrol.FlowKey, fn func(_ contracts.ActiveFlowConnection) error) error {
@@ -790,7 +790,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			// Configure the processor to accept the item but never finalize it, simulating a queued request.
 			h.mockProcessorFactory.processors["shard-A"] = &mockShardProcessor{
 				SubmitFunc: func(item *internal.FlowItem) error {
-					item.SetHandle(&frameworkmocks.MockQueueItemHandle{})
+					item.SetHandle(&fwkfcmocks.MockQueueItemHandle{})
 					itemSubmitted <- item
 					return nil
 				},
@@ -848,7 +848,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			t.Parallel()
 			// Configure a short TTL to keep the test reasonably fast.
 			const requestTTL = 50 * time.Millisecond
-			h := newUnitHarness(t, t.Context(), &Config{
+			h := newUnitHarness(t.Context(), t, &Config{
 				DefaultRequestTTL:               requestTTL,
 				ProcessorReconciliationInterval: time.Minute,
 				ExpiryCleanupInterval:           time.Minute,
@@ -867,7 +867,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			// Configure the processor to accept the item but never finalize it.
 			h.mockProcessorFactory.processors["shard-A"] = &mockShardProcessor{
 				SubmitFunc: func(item *internal.FlowItem) error {
-					item.SetHandle(&frameworkmocks.MockQueueItemHandle{})
+					item.SetHandle(&fwkfcmocks.MockQueueItemHandle{})
 					itemSubmitted <- item
 					return nil
 				},
@@ -949,7 +949,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 				},
 			}
 
-			h := newUnitHarness(t, t.Context(), &Config{}, mockRegistry)
+			h := newUnitHarness(t.Context(), t, &Config{}, mockRegistry)
 
 			// 2. Setup Processor: Simulate a long wait in the queue.
 			h.mockProcessorFactory.processors["shard-A"] = &mockShardProcessor{
@@ -1021,7 +1021,7 @@ func TestFlowController_WorkerManagement(t *testing.T) {
 				// The current state of the world according to the registry.
 				return []contracts.ShardStats{{ID: "shard-A"}}
 			}}
-		h := newUnitHarness(t, t.Context(), &Config{}, mockRegistry)
+		h := newUnitHarness(t.Context(), t, &Config{}, mockRegistry)
 
 		// Pre-populate the controller with initial workers, simulating a previous state.
 		initialShards := []string{"shard-A", "stale-shard"}
@@ -1095,7 +1095,7 @@ func TestFlowController_WorkerManagement(t *testing.T) {
 			return nil
 		}
 
-		h := newUnitHarness(t, t.Context(), &Config{ProcessorReconciliationInterval: reconciliationInterval}, mockRegistry)
+		h := newUnitHarness(t.Context(), t, &Config{ProcessorReconciliationInterval: reconciliationInterval}, mockRegistry)
 		// Ensure we are using the FakeClock specifically for this test, as we need Step/HasWaiters.
 		require.NotNil(t, h.mockClock, "This test requires the harness to be using FakeClock")
 
@@ -1128,7 +1128,7 @@ func TestFlowController_WorkerManagement(t *testing.T) {
 		// Map to store the construction context for each processor instance, allowing us to verify cleanup.
 		constructionContexts := sync.Map{}
 
-		h := newUnitHarness(t, t.Context(), &Config{}, nil)
+		h := newUnitHarness(t.Context(), t, &Config{}, nil)
 
 		// Inject a custom factory to control the timing of worker creation.
 		h.fc.shardProcessorFactory = func(
@@ -1251,7 +1251,7 @@ func setupRegistryForConcurrency(t *testing.T, numShards int, flowKey flowcontro
 			AllOrderedPriorityLevelsFunc: func() []int { return []int{flowKey.Priority} },
 			PriorityBandAccessorFunc: func(priority int) (flowcontrol.PriorityBandAccessor, error) {
 				if priority == flowKey.Priority {
-					return &frameworkmocks.MockPriorityBandAccessor{
+					return &fwkfcmocks.MockPriorityBandAccessor{
 						PriorityV: priority,
 						IterateQueuesFunc: func(f func(flowcontrol.FlowQueueAccessor) bool) {
 							f(currentQueue.FlowQueueAccessor())
@@ -1261,7 +1261,7 @@ func setupRegistryForConcurrency(t *testing.T, numShards int, flowKey flowcontro
 				return nil, fmt.Errorf("unexpected priority %d", priority)
 			},
 			FairnessPolicyFunc: func(_ int) (flowcontrol.FairnessPolicy, error) {
-				return &frameworkmocks.MockFairnessPolicy{
+				return &fwkfcmocks.MockFairnessPolicy{
 					PickFunc: func(_ context.Context, _ flowcontrol.PriorityBandAccessor) (flowcontrol.FlowQueueAccessor, error) {
 						return currentQueue.FlowQueueAccessor(), nil
 					},
@@ -1316,7 +1316,7 @@ func TestFlowController_Concurrency_Distribution(t *testing.T) {
 	mockRegistry := setupRegistryForConcurrency(t, numShards, defaultFlowKey)
 
 	// Initialize the integration harness with real ShardProcessors.
-	h := newIntegrationHarness(t, t.Context(), &Config{
+	h := newIntegrationHarness(t.Context(), t, &Config{
 		// Use a generous buffer to focus the test on distribution logic rather than backpressure.
 		EnqueueChannelBufferSize: numRequests,
 		DefaultRequestTTL:        5 * time.Second,
@@ -1385,7 +1385,7 @@ func TestFlowController_Concurrency_Backpressure(t *testing.T) {
 	mockRegistry := setupRegistryForConcurrency(t, numShards, defaultFlowKey)
 
 	// Use the integration harness with a configuration designed to induce backpressure.
-	h := newIntegrationHarness(t, t.Context(), &Config{
+	h := newIntegrationHarness(t.Context(), t, &Config{
 		// Zero buffer forces immediate use of SubmitOrBlock if the processor loop is busy.
 		EnqueueChannelBufferSize: 0,
 		// Generous TTL to ensure timeouts are not the cause of failure.

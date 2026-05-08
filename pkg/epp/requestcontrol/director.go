@@ -41,7 +41,7 @@ import (
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/datastore"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/flowcontrol/contracts"
 	fwkdl "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/datalayer"
-	fwk "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/requestcontrol"
+	fwkrc "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/requestcontrol"
 	fwkrh "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/requesthandling"
 	fwksched "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/scheduling"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/handlers"
@@ -91,7 +91,7 @@ func NewDirectorWithConfig(
 type responseBodyWork struct {
 	ctx            context.Context
 	request        *fwksched.InferenceRequest
-	response       *fwk.Response
+	response       *fwkrc.Response
 	targetEndpoint *fwkdl.EndpointMetadata
 }
 
@@ -149,7 +149,7 @@ func (d *Director) getInferenceObjective(ctx context.Context, reqCtx *handlers.R
 // HandleRequest orchestrates the request lifecycle.
 // It always returns the requestContext even in the error case, as the request context is used in error handling.
 func (d *Director) HandleRequest(ctx context.Context, reqCtx *handlers.RequestContext, inferenceRequestBody *fwkrh.InferenceRequestBody) (*handlers.RequestContext, error) {
-	tracer := otel.Tracer("gateway-api-inference-extension")
+	tracer := otel.Tracer("llm-d-inference-scheduler")
 	ctx, span := tracer.Start(ctx, "gateway.request_orchestration", trace.WithSpanKind(trace.SpanKindServer))
 	defer span.End()
 
@@ -171,7 +171,7 @@ func (d *Director) HandleRequest(ctx context.Context, reqCtx *handlers.RequestCo
 
 	// Prepare InferenceRequest (needed for both saturation detection and Scheduler)
 	reqCtx.SchedulingRequest = &fwksched.InferenceRequest{
-		RequestId:        reqCtx.Request.Headers[reqcommon.RequestIdHeaderKey],
+		RequestID:        reqCtx.Request.Headers[reqcommon.RequestIDHeaderKey],
 		TargetModel:      reqCtx.TargetModelName,
 		Body:             inferenceRequestBody,
 		Headers:          reqCtx.Request.Headers,
@@ -353,8 +353,8 @@ func (d *Director) HandleResponseHeader(ctx context.Context, reqCtx *handlers.Re
 	if len(d.requestControlPlugins.responseReceivedPlugins) == 0 {
 		return reqCtx
 	}
-	response := &fwk.Response{
-		RequestId:   reqCtx.Request.Headers[reqcommon.RequestIdHeaderKey],
+	response := &fwkrc.Response{
+		RequestID:   reqCtx.Request.Headers[reqcommon.RequestIDHeaderKey],
 		Headers:     reqCtx.Response.Headers,
 		ReqMetadata: reqCtx.Request.Metadata,
 	}
@@ -382,19 +382,19 @@ func (d *Director) HandleResponseBody(ctx context.Context, reqCtx *handlers.Requ
 
 	startOfStream := !reqCtx.ResponseBodyStarted
 	reqCtx.ResponseBodyStarted = true
-	response := &fwk.Response{
-		RequestId:     reqCtx.Request.Headers[reqcommon.RequestIdHeaderKey],
+	response := &fwkrc.Response{
+		RequestID:     reqCtx.Request.Headers[reqcommon.RequestIDHeaderKey],
 		Headers:       reqCtx.Response.Headers,
 		StartOfStream: startOfStream,
 		EndOfStream:   endOfStream,
 		Usage:         reqCtx.Usage,
 	}
-	requestId := reqCtx.Request.Headers[reqcommon.RequestIdHeaderKey]
+	requestID := reqCtx.Request.Headers[reqcommon.RequestIDHeaderKey]
 
 	if endOfStream {
 		// Drain the async queue: close the channel and wait for the goroutine to finish
 		// processing all previously queued chunks before running the final chunk synchronously.
-		if val, ok := d.responseBodyQueues.LoadAndDelete(requestId); ok {
+		if val, ok := d.responseBodyQueues.LoadAndDelete(requestID); ok {
 			q := val.(*responseBodyQueue)
 			close(q.ch)
 			<-q.done // wait for all queued chunks to be processed
@@ -410,14 +410,14 @@ func (d *Director) HandleResponseBody(ctx context.Context, reqCtx *handlers.Requ
 			response:       response,
 			targetEndpoint: reqCtx.TargetPod,
 		}
-		if val, ok := d.responseBodyQueues.Load(requestId); ok {
+		if val, ok := d.responseBodyQueues.Load(requestID); ok {
 			val.(*responseBodyQueue).ch <- work
 		} else {
 			q := &responseBodyQueue{
 				ch:   make(chan responseBodyWork, 100),
 				done: make(chan struct{}),
 			}
-			d.responseBodyQueues.Store(requestId, q)
+			d.responseBodyQueues.Store(requestID, q)
 			go d.processResponseBodyQueue(q)
 			q.ch <- work
 		}
@@ -443,7 +443,7 @@ func (d *Director) runPreRequestPlugins(ctx context.Context, request *fwksched.I
 		loggerDebug.Info("Running PreRequest plugin", "plugin", plugin.TypedName())
 		before := time.Now()
 		plugin.PreRequest(ctx, request, schedulingResult)
-		metrics.RecordPluginProcessingLatency(fwk.PreRequestExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
+		metrics.RecordPluginProcessingLatency(fwkrc.PreRequestExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
 		loggerDebug.Info("Completed running PreRequest plugin successfully", "plugin", plugin.TypedName())
 	}
 }
@@ -453,7 +453,7 @@ func (d *Director) runPrepareDataPlugins(ctx context.Context,
 	if len(d.requestControlPlugins.prepareDataPlugins) == 0 {
 		return nil
 	}
-	return prepareDataPluginsWithTimeout(prepareDataTimeout, d.requestControlPlugins.prepareDataPlugins, ctx, request, endpoints)
+	return prepareDataPluginsWithTimeout(ctx, prepareDataTimeout, d.requestControlPlugins.prepareDataPlugins, request, endpoints)
 }
 
 func (d *Director) runAdmissionPlugins(ctx context.Context,
@@ -470,24 +470,24 @@ func (d *Director) runAdmissionPlugins(ctx context.Context,
 	return true
 }
 
-func (d *Director) runResponseHeaderPlugins(ctx context.Context, request *fwksched.InferenceRequest, response *fwk.Response, targetEndpoint *fwkdl.EndpointMetadata) {
+func (d *Director) runResponseHeaderPlugins(ctx context.Context, request *fwksched.InferenceRequest, response *fwkrc.Response, targetEndpoint *fwkdl.EndpointMetadata) {
 	loggerDebug := log.FromContext(ctx).V(logutil.DEBUG)
 	for _, plugin := range d.requestControlPlugins.responseReceivedPlugins {
 		loggerDebug.Info("Running ResponseReceived plugin", "plugin", plugin.TypedName())
 		before := time.Now()
 		plugin.ResponseHeader(ctx, request, response, targetEndpoint)
-		metrics.RecordPluginProcessingLatency(fwk.ResponseReceivedExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
+		metrics.RecordPluginProcessingLatency(fwkrc.ResponseReceivedExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
 		loggerDebug.Info("Completed running ResponseReceived plugin successfully", "plugin", plugin.TypedName())
 	}
 }
 
-func (d *Director) runResponseBodyPlugins(ctx context.Context, request *fwksched.InferenceRequest, response *fwk.Response, targetEndpoint *fwkdl.EndpointMetadata) {
+func (d *Director) runResponseBodyPlugins(ctx context.Context, request *fwksched.InferenceRequest, response *fwkrc.Response, targetEndpoint *fwkdl.EndpointMetadata) {
 	loggerTrace := log.FromContext(ctx).V(logutil.TRACE)
 	for _, plugin := range d.requestControlPlugins.responseStreamingPlugins {
 		loggerTrace.Info("Running ResponseStreaming plugin", "plugin", plugin.TypedName())
 		before := time.Now()
 		plugin.ResponseBody(ctx, request, response, targetEndpoint)
-		metrics.RecordPluginProcessingLatency(fwk.ResponseStreamingExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
+		metrics.RecordPluginProcessingLatency(fwkrc.ResponseStreamingExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
 		loggerTrace.Info("Completed running ResponseStreaming plugin successfully", "plugin", plugin.TypedName())
 	}
 }

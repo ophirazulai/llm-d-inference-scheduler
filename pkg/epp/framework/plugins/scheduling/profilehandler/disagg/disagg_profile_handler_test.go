@@ -4,16 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
+	"github.com/llm-d/llm-d-inference-scheduler/pkg/common/routing"
 	fwkdl "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/datalayer"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/plugin"
 	fwkrh "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/requesthandling"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/scheduling"
-	approxprefix "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/datalayer/attribute/prefix"
+	attrprefix "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 	"github.com/llm-d/llm-d-inference-scheduler/test/utils"
 )
 
@@ -77,7 +79,7 @@ func completionsRequest(prompt string) *scheduling.InferenceRequest {
 func chatRequest(hasImage, hasVideo, hasAudio bool) *scheduling.InferenceRequest {
 	blocks := []fwkrh.ContentBlock{{Type: "text", Text: "describe this"}}
 	if hasImage {
-		blocks = append(blocks, fwkrh.ContentBlock{Type: "image_url", ImageURL: fwkrh.ImageBlock{Url: "https://example.com/img.jpg"}})
+		blocks = append(blocks, fwkrh.ContentBlock{Type: "image_url", ImageURL: fwkrh.ImageBlock{URL: "https://example.com/img.jpg"}})
 	}
 	if hasVideo {
 		blocks = append(blocks, fwkrh.ContentBlock{Type: "video_url"})
@@ -107,8 +109,8 @@ func injectPrefixCache(profileResults map[string]*scheduling.ProfileRunResult, c
 		return
 	}
 	for _, ep := range res.TargetEndpoints {
-		ep.Put(approxprefix.PrefixCacheMatchInfoKey,
-			approxprefix.NewPrefixCacheMatchInfo(cachedTokens, inputTokens, 1))
+		ep.Put(attrprefix.PrefixCacheMatchInfoKey,
+			attrprefix.NewPrefixCacheMatchInfo(cachedTokens, inputTokens, 1))
 	}
 }
 
@@ -1289,4 +1291,45 @@ func TestHandler_Factory_NilDeciders(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBothProfileAndHeadersHandlerPreRequest verifies that when both
+// disagg-profile-handler and the deprecated disagg-headers-handler are
+// active, both PreRequest hooks run without error. The result is redundant
+// (same header written twice) but not conflicting.
+func TestBothProfileAndHeadersHandlerPreRequest(t *testing.T) {
+	ctx := utils.NewTestContext(t)
+
+	profileHandler := NewDisaggProfileHandler("decode", "prefill", "encode", nil, nil).WithName("profile")
+	headersHandler := NewHeadersHandler("prefill", "encode").WithName("headers") //nolint:staticcheck // intentional: testing deprecated path
+
+	podAddr := "10.0.0.5"
+	podPort := "8080"
+	ep := scheduling.NewEndpoint(
+		&fwkdl.EndpointMetadata{
+			NamespacedName: k8stypes.NamespacedName{Namespace: "default", Name: "prefill-pod"},
+			Address:        podAddr,
+			Port:           podPort,
+		},
+		&fwkdl.Metrics{},
+		nil,
+	)
+
+	request := &scheduling.InferenceRequest{
+		RequestID: "req-both",
+		Headers:   map[string]string{},
+	}
+	result := &scheduling.SchedulingResult{
+		PrimaryProfileName: "decode",
+		ProfileResults: map[string]*scheduling.ProfileRunResult{
+			"prefill": {TargetEndpoints: []scheduling.Endpoint{ep}},
+		},
+	}
+
+	profileHandler.PreRequest(ctx, request, result)
+	headersHandler.PreRequest(ctx, request, result)
+
+	expected := net.JoinHostPort(podAddr, podPort)
+	assert.Equal(t, expected, request.Headers[routing.PrefillEndpointHeader],
+		"both handlers set the same prefill header — redundant but no conflict")
 }

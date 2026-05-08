@@ -48,7 +48,7 @@ import (
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/datastore"
 	fwkdl "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/plugin"
-	fwk "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/requestcontrol"
+	fwkrc "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/requestcontrol"
 	fwkrh "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/requesthandling"
 	fwksched "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/scheduling"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/requesthandling/parsers/openai"
@@ -93,7 +93,7 @@ type mockDatastore struct {
 }
 
 func (ds *mockDatastore) PoolGet() (*datalayer.EndpointPool, error) {
-	return nil, nil
+	return nil, errors.New("sentinel error for mock datastore")
 }
 func (ds *mockDatastore) ObjectiveGet(_ string) *v1alpha2.InferenceObjective {
 	return nil
@@ -771,7 +771,7 @@ func TestDirector_HandleRequest(t *testing.T) {
 				reqCtx := &handlers.RequestContext{
 					Request: &handlers.Request{
 						Headers: map[string]string{
-							reqcommon.RequestIdHeaderKey: "test-req-id-" + test.name, // Ensure a default request ID
+							reqcommon.RequestIDHeaderKey: "test-req-id-" + test.name, // Ensure a default request ID
 						},
 					},
 					ObjectiveKey:    test.inferenceObjectiveName,
@@ -1189,7 +1189,7 @@ func TestDirector_HandleResponseReceived(t *testing.T) {
 	reqCtx := &handlers.RequestContext{
 		Request: &handlers.Request{
 			Headers: map[string]string{
-				reqcommon.RequestIdHeaderKey: "test-req-id-for-response",
+				reqcommon.RequestIDHeaderKey: "test-req-id-for-response",
 			},
 		},
 		Response: &handlers.Response{ // Simulate some response headers
@@ -1201,7 +1201,7 @@ func TestDirector_HandleResponseReceived(t *testing.T) {
 
 	director.HandleResponseHeader(ctx, reqCtx)
 
-	if diff := cmp.Diff("test-req-id-for-response", pr1.lastRespOnResponse.RequestId); diff != "" {
+	if diff := cmp.Diff("test-req-id-for-response", pr1.lastRespOnResponse.RequestID); diff != "" {
 		t.Errorf("Scheduler.OnResponse RequestId mismatch (-want +got):\n%s", diff)
 	}
 	if diff := cmp.Diff(reqCtx.Response.Headers, pr1.lastRespOnResponse.Headers); diff != "" {
@@ -1224,7 +1224,7 @@ func TestDirector_HandleResponseBody(t *testing.T) {
 	reqCtx := &handlers.RequestContext{
 		Request: &handlers.Request{
 			Headers: map[string]string{
-				reqcommon.RequestIdHeaderKey: "test-req-id-for-streaming",
+				reqcommon.RequestIDHeaderKey: "test-req-id-for-streaming",
 			},
 		},
 		Response: &handlers.Response{
@@ -1247,7 +1247,7 @@ func TestDirector_HandleResponseBody(t *testing.T) {
 	director.HandleResponseBody(ctx, reqCtx, true)
 
 	ps1.mu.Lock()
-	resps := make([]*fwk.Response, len(ps1.respsOnStreaming))
+	resps := make([]*fwkrc.Response, len(ps1.respsOnStreaming))
 	copy(resps, ps1.respsOnStreaming)
 	targetPods := make([]string, len(ps1.targetPodsOnStreaming))
 	copy(targetPods, ps1.targetPodsOnStreaming)
@@ -1256,7 +1256,7 @@ func TestDirector_HandleResponseBody(t *testing.T) {
 	assert.Equal(t, 3, len(resps), "Should have received 3 streaming calls")
 
 	for i, resp := range resps {
-		assert.Equal(t, "test-req-id-for-streaming", resp.RequestId)
+		assert.Equal(t, "test-req-id-for-streaming", resp.RequestID)
 		assert.Equal(t, reqCtx.Response.Headers, resp.Headers)
 		assert.Equal(t, "namespace1/test-pod-name", targetPods[i])
 		if i < 2 {
@@ -1287,7 +1287,7 @@ func TestDirector_HandleResponseBody_ChunkOrdering(t *testing.T) {
 			Request: &handlers.Request{
 				Headers: map[string]string{
 					// All chunks share the same request ID so they go through the same queue.
-					reqcommon.RequestIdHeaderKey: "ordering-test-request",
+					reqcommon.RequestIDHeaderKey: "ordering-test-request",
 				},
 			},
 			Response: &handlers.Response{
@@ -1303,7 +1303,7 @@ func TestDirector_HandleResponseBody_ChunkOrdering(t *testing.T) {
 	finalReqCtx := &handlers.RequestContext{
 		Request: &handlers.Request{
 			Headers: map[string]string{
-				reqcommon.RequestIdHeaderKey: "ordering-test-request",
+				reqcommon.RequestIDHeaderKey: "ordering-test-request",
 			},
 		},
 		Response: &handlers.Response{
@@ -1339,7 +1339,7 @@ func (p *orderTrackingPlugin) TypedName() fwkplugin.TypedName {
 	return p.typedName
 }
 
-func (p *orderTrackingPlugin) ResponseBody(_ context.Context, _ *fwksched.InferenceRequest, response *fwk.Response, _ *fwkdl.EndpointMetadata) {
+func (p *orderTrackingPlugin) ResponseBody(_ context.Context, _ *fwksched.InferenceRequest, response *fwkrc.Response, _ *fwkdl.EndpointMetadata) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.observedTokenCounts = append(p.observedTokenCounts, response.Usage.CompletionTokens)
@@ -1354,18 +1354,18 @@ const (
 type testResponseReceived struct {
 	mu                      sync.Mutex
 	typedName               fwkplugin.TypedName
-	lastRespOnResponse      *fwk.Response
+	lastRespOnResponse      *fwkrc.Response
 	lastTargetPodOnResponse string
 }
 
 type testResponseStreaming struct {
 	mu                    sync.Mutex
 	typedName             fwkplugin.TypedName
-	respsOnStreaming      []*fwk.Response
+	respsOnStreaming      []*fwkrc.Response
 	targetPodsOnStreaming []string
 
 	// Legacy fields for existing tests if any, but better to update them
-	lastRespOnStreaming      *fwk.Response
+	lastRespOnStreaming      *fwkrc.Response
 	lastTargetPodOnStreaming string
 }
 
@@ -1389,14 +1389,14 @@ func (p *testResponseStreaming) TypedName() fwkplugin.TypedName {
 	return p.typedName
 }
 
-func (p *testResponseReceived) ResponseHeader(_ context.Context, _ *fwksched.InferenceRequest, response *fwk.Response, targetPod *fwkdl.EndpointMetadata) {
+func (p *testResponseReceived) ResponseHeader(_ context.Context, _ *fwksched.InferenceRequest, response *fwkrc.Response, targetPod *fwkdl.EndpointMetadata) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.lastRespOnResponse = response
 	p.lastTargetPodOnResponse = targetPod.NamespacedName.String()
 }
 
-func (p *testResponseStreaming) ResponseBody(_ context.Context, _ *fwksched.InferenceRequest, response *fwk.Response, targetPod *fwkdl.EndpointMetadata) {
+func (p *testResponseStreaming) ResponseBody(_ context.Context, _ *fwksched.InferenceRequest, response *fwkrc.Response, targetPod *fwkdl.EndpointMetadata) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.respsOnStreaming = append(p.respsOnStreaming, response)

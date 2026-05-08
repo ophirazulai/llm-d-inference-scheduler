@@ -31,7 +31,7 @@ import (
 	fwkdl "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/datalayer"
 	fwkrh "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/requesthandling"
 	fwksched "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/scheduling"
-	utils "github.com/llm-d/llm-d-inference-scheduler/test/utils/igw"
+	igwtestutils "github.com/llm-d/llm-d-inference-scheduler/test/utils/igw"
 )
 
 // mockPredictor implements PredictorInterface for testing
@@ -135,7 +135,7 @@ func createTestChatCompletionsInferenceRequest(reqID string, ttftSLO, tpotSLO fl
 
 func createTestInferenceRequestWithBody(reqID string, ttftSLO, tpotSLO float64, body *fwkrh.InferenceRequestBody) *fwksched.InferenceRequest {
 	headers := make(map[string]string)
-	headers[reqcommon.RequestIdHeaderKey] = reqID
+	headers[reqcommon.RequestIDHeaderKey] = reqID
 	if ttftSLO > 0 {
 		headers["x-ttft-slo"] = fmt.Sprintf("%f", ttftSLO)
 	}
@@ -329,7 +329,7 @@ func TestPredictedLatencyFactory(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handle := utils.NewTestHandle(context.Background())
+			handle := igwtestutils.NewTestHandle(context.Background())
 			rawParams := json.RawMessage(tt.jsonParams)
 			plugin, err := PredictedLatencyFactory(tt.pluginName, rawParams, handle)
 
@@ -365,7 +365,7 @@ func TestPredictedLatencyFactoryInvalidJSON(t *testing.T) {
 
 	for _, tt := range invalidTests {
 		t.Run(tt.name, func(t *testing.T) {
-			handle := utils.NewTestHandle(context.Background())
+			handle := igwtestutils.NewTestHandle(context.Background())
 			rawParams := json.RawMessage(tt.jsonParams)
 			plugin, err := PredictedLatencyFactory("test", rawParams, handle)
 
@@ -385,7 +385,7 @@ func TestSloContextStoreEviction(t *testing.T) {
 
 	req := &fwksched.InferenceRequest{
 		Headers: map[string]string{
-			reqcommon.RequestIdHeaderKey: requestID,
+			reqcommon.RequestIDHeaderKey: requestID,
 		},
 	}
 

@@ -29,8 +29,9 @@ import (
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/plugin"
 	"github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/requestcontrol"
-	framework "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/scheduling"
+	fwksched "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/interface/scheduling"
 	attrconcurrency "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
+	sourcenotifications "github.com/llm-d/llm-d-inference-scheduler/pkg/epp/framework/plugins/datalayer/source/notifications"
 )
 
 const (
@@ -52,6 +53,7 @@ var (
 	_ requestcontrol.ResponseBodyProcessor = &InFlightLoadProducer{}
 	_ requestcontrol.DataProducer          = &InFlightLoadProducer{}
 	_ datalayer.EndpointExtractor          = &InFlightLoadProducer{}
+	_ datalayer.Registrant                 = &InFlightLoadProducer{}
 )
 
 type InFlightLoadProducer struct {
@@ -65,14 +67,20 @@ func (p *InFlightLoadProducer) TypedName() fwkplugin.TypedName {
 	return p.typedName
 }
 
+// RegisterDependencies declares that this plugin needs an endpoint-notification-source to track
+// endpoint lifecycle events. The source is auto-created if not already in the config.
+func (p *InFlightLoadProducer) RegisterDependencies(r datalayer.Registrar) error {
+	return r.Register(datalayer.PendingRegistration{
+		Owner:         p.TypedName(),
+		SourceType:    sourcenotifications.EndpointNotificationSourceType,
+		Extractor:     p,
+		DefaultSource: sourcenotifications.NewEndpointDataSource(sourcenotifications.EndpointNotificationSourceType, sourcenotifications.EndpointNotificationSourceType),
+	})
+}
+
 // ExpectedInputType defines the type expected by the extractor.
 func (p *InFlightLoadProducer) ExpectedInputType() reflect.Type {
 	return datalayer.EndpointEventReflectType
-}
-
-// Extract transforms the raw data into structured attributes (not used for notifications).
-func (p *InFlightLoadProducer) Extract(context.Context, any, datalayer.Endpoint) error {
-	return nil
 }
 
 // ExtractEndpoint handles endpoint deletion events to prune stateful trackers.
@@ -88,7 +96,7 @@ func (p *InFlightLoadProducer) ExtractEndpoint(ctx context.Context, event datala
 	return nil
 }
 
-func (p *InFlightLoadProducer) PrepareRequestData(_ context.Context, _ *framework.InferenceRequest, endpoints []framework.Endpoint) error {
+func (p *InFlightLoadProducer) PrepareRequestData(_ context.Context, _ *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) error {
 	for _, e := range endpoints {
 		endpointID := e.GetMetadata().NamespacedName.String()
 		e.Put(attrconcurrency.InFlightLoadKey, &attrconcurrency.InFlightLoad{
@@ -99,7 +107,7 @@ func (p *InFlightLoadProducer) PrepareRequestData(_ context.Context, _ *framewor
 	return nil
 }
 
-func (p *InFlightLoadProducer) PreRequest(_ context.Context, request *framework.InferenceRequest, result *framework.SchedulingResult) {
+func (p *InFlightLoadProducer) PreRequest(_ context.Context, request *fwksched.InferenceRequest, result *fwksched.SchedulingResult) {
 	if result == nil || len(result.ProfileResults) == 0 {
 		return
 	}
@@ -122,7 +130,7 @@ func (p *InFlightLoadProducer) PreRequest(_ context.Context, request *framework.
 
 func (p *InFlightLoadProducer) ResponseBody(
 	ctx context.Context,
-	request *framework.InferenceRequest,
+	request *fwksched.InferenceRequest,
 	resp *requestcontrol.Response,
 	_ *datalayer.EndpointMetadata,
 ) {
@@ -159,7 +167,7 @@ func (p *InFlightLoadProducer) ResponseBody(
 	}
 }
 
-func (p *InFlightLoadProducer) release(endpoint framework.Endpoint, request *framework.InferenceRequest) {
+func (p *InFlightLoadProducer) release(endpoint fwksched.Endpoint, request *fwksched.InferenceRequest) {
 	if endpoint == nil || endpoint.GetMetadata() == nil {
 		return
 	}
