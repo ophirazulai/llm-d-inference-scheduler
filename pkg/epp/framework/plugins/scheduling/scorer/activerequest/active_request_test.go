@@ -221,13 +221,8 @@ func TestActiveRequest_DefaultParamsProduceContinuousScores(t *testing.T) {
 	ctx := utils.NewTestContext(t)
 	scorer := NewActiveRequest(ctx, &Parameters{})
 
-	podLight := newTestEndpoint("pod-light", 0)
-	podHeavy := newTestEndpoint("pod-heavy", 0)
-
-	scorer.mutex.Lock()
-	scorer.endpointCounts["default/pod-light"] = 3
-	scorer.endpointCounts["default/pod-heavy"] = 11
-	scorer.mutex.Unlock()
+	podLight := newTestEndpointWithLoad("pod-light", 3)
+	podHeavy := newTestEndpointWithLoad("pod-heavy", 11)
 
 	scores := scorer.Score(ctx, nil, nil, []scheduling.Endpoint{podLight, podHeavy})
 
